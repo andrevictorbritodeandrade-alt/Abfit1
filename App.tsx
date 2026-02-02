@@ -23,7 +23,10 @@ import {
   Dumbbell,
   Trash2,
   CheckCircle2,
-  X
+  X,
+  Settings,
+  Edit3,
+  Save
 } from 'lucide-react';
 import { EXERCISE_DATABASE, MUSCLE_GROUPS, GEMINI_MODEL, IMAGEN_MODEL } from './constants';
 import { StudentProfile, PeriodizationData, ExerciseDetails, BrainResult, AppView, PrescribedExercise } from './types';
@@ -55,16 +58,26 @@ const App = () => {
   const [isPlaying] = useState(true);
 
   // Workout Construction State
+  const [workoutName, setWorkoutName] = useState("TREINO A");
   const [workout, setWorkout] = useState<PrescribedExercise[]>([]);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showWorkoutList, setShowWorkoutList] = useState(false);
-  const [exerciseConfig, setExerciseConfig] = useState({
+  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
+  
+  // State for Editing
+  const [editingExerciseId, setEditingExerciseId] = useState<string | null>(null);
+
+  // Default Configuration (Global)
+  const [defaultConfig, setDefaultConfig] = useState({
     sets: "3",
     reps: "10-12",
     rest: "60s",
     technique: "Normal",
     observation: ""
   });
+
+  // Current Config being edited/added
+  const [exerciseConfig, setExerciseConfig] = useState(defaultConfig);
 
   // Gemini States
   const [bioInsight, setBioInsight] = useState("");
@@ -153,7 +166,8 @@ const App = () => {
     setBioInsight("");
     setTechnicalCue("");
     setPeriodizationData(null);
-    setWorkout([]); // Clear previous workout or load from DB if connected
+    setWorkout([]); 
+    setWorkoutName("TREINO A");
     
     // Set student
     setStudentProfile(prev => ({ ...prev, name: name }));
@@ -168,38 +182,76 @@ const App = () => {
   };
 
   // --- Workout Management Handlers ---
-  const handleOpenConfig = () => {
-    // Reset defaults or load intelligent defaults based on profile
-    setExerciseConfig({ 
-      sets: "3", 
-      reps: studentProfile.objectives.toLowerCase().includes('hipertrofia') ? "8-12" : "15", 
-      rest: "60s", 
-      technique: "Normal", 
-      observation: "" 
-    });
+  
+  // Open modal to Add New Exercise (using defaults)
+  const handleOpenConfigAdd = () => {
+    setExerciseConfig({ ...defaultConfig }); // Load defaults
+    setEditingExerciseId(null); // Ensure we are in "Add" mode
     setShowConfigModal(true);
   };
 
-  const handleConfirmAdd = () => {
-    if (!selectedExercise) return;
+  // Open modal to Edit Existing Exercise
+  const handleOpenConfigEdit = (exercise: PrescribedExercise) => {
+    setExerciseConfig({
+      sets: exercise.sets,
+      reps: exercise.reps,
+      rest: exercise.rest,
+      technique: exercise.technique,
+      observation: exercise.observation
+    });
+    setEditingExerciseId(exercise.id); // Set ID to "Edit" mode
     
-    const newExercise: PrescribedExercise = {
-      id: Date.now().toString(),
-      name: selectedExercise.name,
-      sets: exerciseConfig.sets,
-      reps: exerciseConfig.reps,
-      rest: exerciseConfig.rest,
-      technique: exerciseConfig.technique,
-      observation: exerciseConfig.observation,
-      image: exerciseImage || undefined
-    };
-
-    setWorkout(prev => [...prev, newExercise]);
-    setShowConfigModal(false);
+    // If editing from the list, we might want to ensure the "selectedExercise" context matches visually,
+    // but primarily we just need the modal to be open.
+    // For visual consistency, let's just open the modal.
+    setShowConfigModal(true);
   };
 
-  const handleRemoveExercise = (id: string) => {
+  const handleConfirmAddOrUpdate = () => {
+    if (editingExerciseId) {
+      // UPDATE EXISTING
+      setWorkout(prev => prev.map(item => 
+        item.id === editingExerciseId 
+        ? { 
+            ...item, 
+            sets: exerciseConfig.sets,
+            reps: exerciseConfig.reps,
+            rest: exerciseConfig.rest,
+            technique: exerciseConfig.technique,
+            observation: exerciseConfig.observation
+          } 
+        : item
+      ));
+    } else {
+      // ADD NEW
+      if (!selectedExercise) return;
+      const newExercise: PrescribedExercise = {
+        id: Date.now().toString(),
+        name: selectedExercise.name,
+        sets: exerciseConfig.sets,
+        reps: exerciseConfig.reps,
+        rest: exerciseConfig.rest,
+        technique: exerciseConfig.technique,
+        observation: exerciseConfig.observation,
+        image: exerciseImage || undefined
+      };
+      setWorkout(prev => [...prev, newExercise]);
+    }
+    
+    setShowConfigModal(false);
+    setEditingExerciseId(null);
+  };
+
+  const handleRemoveExercise = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent opening edit modal
     setWorkout(prev => prev.filter(item => item.id !== id));
+  };
+
+  const cycleWorkoutName = () => {
+    const names = ["TREINO A", "TREINO B", "TREINO C", "TREINO D", "TREINO E"];
+    const currentIndex = names.indexOf(workoutName);
+    const nextIndex = (currentIndex + 1) % names.length;
+    setWorkoutName(names[nextIndex]);
   };
 
   // --- Gemini Functions ---
@@ -480,21 +532,32 @@ const App = () => {
                <ChevronRight className="w-4 h-4 text-neutral-500 group-hover:text-white rotate-180" />
             </button>
             <div className="h-8 w-px bg-white/10 mx-2"></div>
-            <div className="flex flex-col">
-              <span className="text-[8px] font-black uppercase tracking-[0.2em] text-red-500">Aluno</span>
-              <span className="font-bold leading-none">{studentProfile.name}</span>
-            </div>
+            
+            {/* Workout Name Selector */}
+            <button onClick={cycleWorkoutName} className="flex flex-col group cursor-pointer">
+              <span className="text-[8px] font-black uppercase tracking-[0.2em] text-red-500 group-hover:text-red-400 transition-colors">Ficha de Treino</span>
+              <span className="font-bold leading-none flex items-center gap-2">
+                {workoutName} <Edit3 className="w-3 h-3 text-neutral-600 group-hover:text-white" />
+              </span>
+            </button>
           </div>
           <div className="flex gap-3">
+            {/* Global Settings Button */}
+            <button 
+              onClick={() => setShowGlobalSettings(true)}
+              className="bg-white/5 hover:bg-white/10 p-2.5 rounded-full transition-colors border border-white/10 text-neutral-400 hover:text-white"
+              title="Configurar Padrão (Séries/Reps)"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+
             <button 
               onClick={() => setShowWorkoutList(true)} 
               className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] px-5 py-2.5 rounded-full border border-white/10 hover:bg-white/10 transition-all text-white"
             >
               <Dumbbell className="w-3 h-3" /> Treino ({workout.length})
             </button>
-            <button onClick={() => setShowAnamnesis(true)} className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] px-5 py-2.5 rounded-full border transition-all ${!studentProfile.objectives ? 'bg-red-500 text-black border-red-500 animate-pulse' : 'bg-white/5 text-white border-white/10 hover:bg-white/10'}`}>
-              <ClipboardList className="w-3 h-3" /> {studentProfile.objectives ? 'Dados' : 'Anamnese'}
-            </button>
+            
             {periodizationData && (
               <button onClick={() => setShowReport(true)} className="hidden md:flex items-center gap-2 text-[10px] font-black text-red-500 uppercase tracking-[0.2em] bg-red-500/10 px-5 py-2.5 rounded-full border border-red-500/20">
                 <FileText className="w-3 h-3" /> Relatório
@@ -604,7 +667,7 @@ const App = () => {
                       </button>
                       
                       <button 
-                        onClick={handleOpenConfig}
+                        onClick={handleOpenConfigAdd}
                         className="bg-white/10 p-3 rounded-full hover:bg-red-500 hover:text-black transition-all border border-white/10 group shadow-lg"
                         title="Adicionar ao Treino"
                       >
@@ -641,13 +704,45 @@ const App = () => {
       </main>
 
       {/* MODALS AREA */}
+
+      {/* Modal de Configuração Global (Padrões) */}
+      {showGlobalSettings && (
+        <div className="fixed inset-0 z-[130] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+           <div className="bg-neutral-900 border border-white/10 w-full max-w-sm rounded-[2.5rem] p-8 shadow-3xl animate-in zoom-in-95">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                   <Settings className="w-5 h-5 text-red-500"/> Padrão do Treino
+                </h3>
+                <button onClick={() => setShowGlobalSettings(false)} className="text-neutral-500 hover:text-white"><X className="w-5 h-5"/></button>
+              </div>
+              <p className="text-xs text-neutral-500 mb-4">Defina os valores que serão carregados automaticamente ao adicionar novos exercícios.</p>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-500">Séries Padrão</label>
+                      <input className="w-full bg-black border border-white/10 rounded-xl p-3 text-white text-center font-bold outline-none focus:border-red-500" value={defaultConfig.sets} onChange={(e) => setDefaultConfig({...defaultConfig, sets: e.target.value})} />
+                   </div>
+                   <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-500">Reps Padrão</label>
+                      <input className="w-full bg-black border border-white/10 rounded-xl p-3 text-white text-center font-bold outline-none focus:border-red-500" value={defaultConfig.reps} onChange={(e) => setDefaultConfig({...defaultConfig, reps: e.target.value})} />
+                   </div>
+                </div>
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase text-neutral-500">Descanso Padrão</label>
+                    <input className="w-full bg-black border border-white/10 rounded-xl p-3 text-white text-center font-bold outline-none focus:border-red-500" value={defaultConfig.rest} onChange={(e) => setDefaultConfig({...defaultConfig, rest: e.target.value})} />
+                 </div>
+                 <button onClick={() => setShowGlobalSettings(false)} className="w-full py-3 bg-red-500 text-black font-black uppercase tracking-widest rounded-xl mt-2">Salvar Padrão</button>
+              </div>
+           </div>
+        </div>
+      )}
       
-      {/* Modal de Configuração de Exercício (Ao clicar no +) */}
-      {showConfigModal && selectedExercise && (
+      {/* Modal de Configuração de Exercício (Adicionar/Editar) */}
+      {showConfigModal && (
         <div className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-neutral-900 border border-white/10 w-full max-w-lg rounded-[2.5rem] p-8 shadow-3xl animate-in zoom-in-95">
              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-white">Configurar Série</h3>
+                <h3 className="text-xl font-bold text-white">{editingExerciseId ? 'Editar Exercício' : 'Adicionar à Série'}</h3>
                 <button onClick={() => setShowConfigModal(false)} className="text-neutral-500 hover:text-white"><X className="w-6 h-6"/></button>
              </div>
              <div className="space-y-4">
@@ -675,8 +770,8 @@ const App = () => {
                    <label className="text-[10px] font-black uppercase text-neutral-500">Observações (Opcional)</label>
                    <textarea className="w-full bg-black border border-white/10 rounded-xl p-3 text-white text-sm outline-none focus:border-red-500 resize-none h-20" placeholder="Ex: Cadência 3030..." value={exerciseConfig.observation} onChange={(e) => setExerciseConfig({...exerciseConfig, observation: e.target.value})} />
                 </div>
-                <button onClick={handleConfirmAdd} className="w-full py-4 bg-red-500 hover:bg-white hover:text-black text-black font-black uppercase tracking-widest rounded-xl transition-all mt-4 flex items-center justify-center gap-2">
-                   <CheckCircle2 className="w-5 h-5" /> Confirmar e Adicionar
+                <button onClick={handleConfirmAddOrUpdate} className="w-full py-4 bg-red-500 hover:bg-white hover:text-black text-black font-black uppercase tracking-widest rounded-xl transition-all mt-4 flex items-center justify-center gap-2">
+                   <CheckCircle2 className="w-5 h-5" /> {editingExerciseId ? 'Salvar Alterações' : 'Confirmar e Adicionar'}
                 </button>
              </div>
           </div>
@@ -691,7 +786,7 @@ const App = () => {
                  <div className="flex items-center gap-3">
                     <Dumbbell className="w-6 h-6 text-red-500" />
                     <div>
-                      <h2 className="text-xl font-black uppercase italic tracking-tighter text-white">Treino de Hoje</h2>
+                      <h2 className="text-xl font-black uppercase italic tracking-tighter text-white">{workoutName}</h2>
                       <p className="text-[10px] text-neutral-500 font-bold">{workout.length} Exercícios</p>
                     </div>
                  </div>
@@ -705,17 +800,29 @@ const App = () => {
                    </div>
                  ) : (
                    workout.map((item, idx) => (
-                     <div key={item.id} className="bg-black border border-white/5 p-5 rounded-2xl flex items-center justify-between group hover:border-red-500/30 transition-all">
+                     <div 
+                        key={item.id} 
+                        onClick={() => handleOpenConfigEdit(item)}
+                        className="bg-black border border-white/5 p-5 rounded-2xl flex items-center justify-between group hover:border-red-500/30 transition-all cursor-pointer"
+                      >
                         <div className="flex items-center gap-4">
-                           <div className="h-10 w-10 bg-neutral-900 rounded-full flex items-center justify-center font-black text-red-500 text-sm border border-white/5">{idx + 1}</div>
+                           {/* Ordinal Number logic: idx + 1 + 'º' */}
+                           <div className="h-10 w-10 bg-neutral-900 rounded-full flex items-center justify-center font-black text-red-500 text-sm border border-white/5">
+                             {idx + 1}º
+                           </div>
                            <div>
                               <h4 className="font-bold text-white text-sm">{item.name}</h4>
-                              <p className="text-[10px] text-neutral-400 font-medium mt-1">
-                                {item.sets} x {item.reps} • {item.rest} • {item.technique}
+                              <p className="text-[10px] text-neutral-400 font-medium mt-1 flex gap-2">
+                                <span className="bg-white/10 px-1.5 rounded">{item.sets} Séries</span>
+                                <span className="bg-white/10 px-1.5 rounded">{item.reps} Reps</span>
+                                <span className="bg-white/10 px-1.5 rounded">{item.rest}</span>
                               </p>
                            </div>
                         </div>
-                        <button onClick={() => handleRemoveExercise(item.id)} className="p-2 text-neutral-600 hover:text-red-500 transition-colors"><Trash2 className="w-5 h-5" /></button>
+                        <div className="flex items-center gap-2">
+                          <Edit3 className="w-4 h-4 text-neutral-600 group-hover:text-white" />
+                          <button onClick={(e) => handleRemoveExercise(item.id, e)} className="p-2 text-neutral-600 hover:text-red-500 transition-colors"><Trash2 className="w-5 h-5" /></button>
+                        </div>
                      </div>
                    ))
                  )}
