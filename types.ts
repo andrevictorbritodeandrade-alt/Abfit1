@@ -18,12 +18,26 @@ export interface StudentProfile {
   trainingSchedule: string;
   sessionDuration: string;
   goalTimeline: string;
+  startDate: string;
+  weeklyFrequency: string;
+  plannedSessions: string;
+}
+
+export interface Microcycle {
+  range: string;
+  focus: string;
+  method: string;
+  intensity: string;
+  volume: string;
+  notes: string;
 }
 
 export interface PeriodizationData {
   summary: string;
   macrocycle: string;
+  microcycles: Microcycle[];
   clinicalNotes: string[];
+  references: string[];
 }
 
 export interface ExerciseDetails {
@@ -49,4 +63,23 @@ export interface PrescribedExercise {
   image?: string;
 }
 
-export type AppView = 'teacher-login' | 'student-list' | 'workspace';
+export interface StudentData {
+  profile: StudentProfile;
+  workouts: {
+    [key: string]: PrescribedExercise[];
+  };
+  periodization?: PeriodizationData | null;
+}
+
+export interface AppDatabase {
+  students: { [key: string]: StudentData };
+  globalSettings: {
+    sets: string;
+    reps: string;
+    rest: string;
+    technique: string;
+    observation: string;
+  };
+}
+
+export type AppView = 'teacher-login' | 'student-list' | 'workspace' | 'exercise-library';

@@ -1,7 +1,8 @@
 import { ExerciseDatabase } from './types';
 
 export const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
-export const IMAGEN_MODEL = "imagen-4.0-generate-001";
+export const IMAGEN_MODEL = "gemini-2.5-flash-image";
+export const SERIES_OPTIONS = ["A", "B", "C", "D", "E"];
 
 export const EXERCISE_DATABASE: ExerciseDatabase = {
   "Peito": [
