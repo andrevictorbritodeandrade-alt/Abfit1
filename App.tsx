@@ -49,6 +49,9 @@ import {
   AppDatabase
 } from './types';
 
+import { db as firestore } from './src/firebase';
+import { collection, doc, setDoc, getDoc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
+
 import { 
   GEMINI_MODEL, 
   IMAGEN_MODEL, 
@@ -144,56 +147,63 @@ const App = () => {
   
   // Periodization States
   const [isConsulting, setIsConsulting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [isLandscape, setIsLandscape] = useState(false);
+  const [dashboardTab, setDashboardTab] = useState<'periodizacao' | 'treinos'>('treinos');
 
   const detailSectionRef = useRef<HTMLDivElement>(null);
 
-  // --- LOCAL STORAGE & INIT ---
+  // --- FIREBASE SYNC ---
 
   useEffect(() => {
-    const savedData = localStorage.getItem('prescreveai-data-v2');
-    if (savedData) {
-      try {
-        const parsed = JSON.parse(savedData);
-        // Robust merge logic
-        const mergedStudents = { ...INITIAL_DB.students };
-        
-        const loadedStudents = parsed.students || {};
-        
-        // Merge loaded students with default structure to ensure new fields exist
-        Object.keys(loadedStudents).forEach(key => {
-            const savedStudent = loadedStudents[key];
-            const defaultProfile = INITIAL_DB.students["André Brito"].profile; // Use a template for defaults
-            
-            mergedStudents[key] = {
-                ...savedStudent,
-                profile: {
-                    ...defaultProfile, // Set defaults first
-                    ...(savedStudent.profile || {}), // Override with saved
-                    name: savedStudent.profile?.name || key // Guarantee name
-                },
-                workouts: savedStudent.workouts || { "A": [], "B": [], "C": [], "D": [], "E": [] }
-            };
-        });
+    const q = collection(firestore, "students");
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const students: { [key: string]: StudentData } = {};
+      querySnapshot.forEach((doc) => {
+        students[doc.id] = doc.data() as StudentData;
+      });
+      setDb(prev => ({
+        ...prev,
+        students: { ...prev.students, ...students }
+      }));
+    });
 
-        setDb({ 
-            students: mergedStudents,
-            globalSettings: { ...INITIAL_DB.globalSettings, ...(parsed.globalSettings || {}) } 
-        });
-      } catch (e) {
-        console.error("Failed to load data, using defaults", e);
+    // Load global settings
+    const loadSettings = async () => {
+      const settingsDoc = doc(firestore, "settings", "global");
+      const snap = await getDoc(settingsDoc);
+      if (snap.exists()) {
+        setDb(prev => ({
+          ...prev,
+          globalSettings: snap.data() as any
+        }));
       }
-    }
+    };
+    loadSettings();
+
+    return () => unsubscribe();
   }, []);
 
-  // Save whenever DB changes
-  useEffect(() => {
+  // Helper to save student to Firebase
+  const saveStudentToFirebase = async (name: string, data: StudentData) => {
     try {
-      localStorage.setItem('prescreveai-data-v2', JSON.stringify(db));
+      const studentDoc = doc(firestore, "students", name);
+      await setDoc(studentDoc, data);
     } catch (e) {
-      console.error("Failed to save data", e);
+      console.error("Error saving student to Firebase:", e);
     }
-  }, [db]);
+  };
+
+  // Helper to save global settings
+  const saveSettingsToFirebase = async (settings: any) => {
+    try {
+      const settingsDoc = doc(firestore, "settings", "global");
+      await setDoc(settingsDoc, settings);
+    } catch (e) {
+      console.error("Error saving settings to Firebase:", e);
+    }
+  };
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
@@ -233,96 +243,6 @@ const App = () => {
     }
   }, [selectedMuscle]);
 
-  // --- Helpers to Update DB ---
-
-  const updateStudentProfile = (name: string, updates: Partial<StudentProfile>) => {
-    setDb(prev => ({
-      ...prev,
-      students: {
-        ...prev.students,
-        [name]: {
-          ...prev.students[name],
-          profile: { ...prev.students[name].profile, ...updates }
-        }
-      }
-    }));
-  };
-
-  const addExerciseToSeries = (studentName: string, series: string, exercise: PrescribedExercise) => {
-    setDb(prev => {
-      const student = prev.students[studentName];
-      const currentWorkout = student.workouts[series] || [];
-      return {
-        ...prev,
-        students: {
-          ...prev.students,
-          [studentName]: {
-            ...student,
-            workouts: {
-              ...student.workouts,
-              [series]: [...currentWorkout, exercise]
-            }
-          }
-        }
-      };
-    });
-  };
-
-  const updateExerciseInSeries = (studentName: string, series: string, updatedEx: PrescribedExercise) => {
-    setDb(prev => {
-      const student = prev.students[studentName];
-      return {
-        ...prev,
-        students: {
-          ...prev.students,
-          [studentName]: {
-            ...student,
-            workouts: {
-              ...student.workouts,
-              [series]: student.workouts[series].map(ex => ex.id === updatedEx.id ? updatedEx : ex)
-            }
-          }
-        }
-      };
-    });
-  };
-
-  const removeExerciseFromSeries = (studentName: string, series: string, exId: string) => {
-    setDb(prev => {
-      const student = prev.students[studentName];
-      return {
-        ...prev,
-        students: {
-          ...prev.students,
-          [studentName]: {
-            ...student,
-            workouts: {
-              ...student.workouts,
-              [series]: student.workouts[series].filter(ex => ex.id !== exId)
-            }
-          }
-        }
-      };
-    });
-  };
-
-  const updatePeriodization = (studentName: string, data: PeriodizationData) => {
-    setDb(prev => ({
-      ...prev,
-      students: {
-        ...prev.students,
-        [studentName]: {
-          ...prev.students[studentName],
-          periodization: data
-        }
-      }
-    }));
-  };
-
-  const saveGlobalSettings = (settings: typeof db.globalSettings) => {
-    setDb(prev => ({ ...prev, globalSettings: settings }));
-  };
-
   // --- Date Calculations ---
   const calculateRenewalDate = (profile: StudentProfile) => {
       if(!profile.startDate || !profile.plannedSessions || !profile.weeklyFrequency) return null;
@@ -343,17 +263,152 @@ const App = () => {
   };
 
   const getRenewalStatus = (renewalDate: Date | null) => {
-      if(!renewalDate) return { status: 'ok', message: '' };
-      
-      const today = new Date();
-      const diffTime = renewalDate.getTime() - today.getTime();
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-
-      if (diffDays < 0) return { status: 'expired', message: `Vencido há ${Math.abs(diffDays)} dias!` };
-      if (diffDays <= 7) return { status: 'warning', message: `Renovar em ${diffDays} dias` };
-      return { status: 'ok', message: `Renovação: ${renewalDate.toLocaleDateString('pt-BR')}` };
+    if (!renewalDate) return { status: 'ok', message: '' };
+    const now = new Date();
+    const diff = renewalDate.getTime() - now.getTime();
+    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+    
+    if (days < 0) return { status: 'expired', message: 'Vencido' };
+    if (days <= 7) return { status: 'warning', message: `Vence em ${days}d` };
+    return { status: 'ok', message: '' };
   };
 
+  // --- Helpers to Update DB ---
+
+  const updateStudentProfile = (name: string, updates: Partial<StudentProfile>) => {
+    setDb(prev => {
+      const currentStudent = prev.students[name];
+      const updatedProfile = { ...currentStudent.profile, ...updates };
+      const renewalDate = calculateRenewalDate(updatedProfile);
+      
+      const updatedStudent = {
+        ...currentStudent,
+        profile: updatedProfile,
+        renewalDate: renewalDate ? renewalDate.toISOString().split('T')[0] : currentStudent.renewalDate
+      };
+      
+      saveStudentToFirebase(name, updatedStudent);
+      
+      return {
+        ...prev,
+        students: {
+          ...prev.students,
+          [name]: updatedStudent
+        }
+      };
+    });
+  };
+
+  const addExerciseToSeries = (studentName: string, series: string, exercise: PrescribedExercise) => {
+    setDb(prev => {
+      const student = prev.students[studentName];
+      const currentWorkout = student.workouts[series] || [];
+      const now = new Date().toLocaleString('pt-BR');
+      
+      const updatedStudent = {
+        ...student,
+        workouts: {
+          ...student.workouts,
+          [series]: [...currentWorkout, exercise]
+        },
+        workoutUpdatedAt: now,
+        workoutCreatedAt: student.workoutCreatedAt || now
+      };
+      
+      saveStudentToFirebase(studentName, updatedStudent);
+      
+      return {
+        ...prev,
+        students: {
+          ...prev.students,
+          [studentName]: updatedStudent
+        }
+      };
+    });
+  };
+
+  const updateExerciseInSeries = (studentName: string, series: string, updatedEx: PrescribedExercise) => {
+    setDb(prev => {
+      const student = prev.students[studentName];
+      const now = new Date().toLocaleString('pt-BR');
+      
+      const updatedStudent = {
+        ...student,
+        workouts: {
+          ...student.workouts,
+          [series]: student.workouts[series].map(ex => ex.id === updatedEx.id ? updatedEx : ex)
+        },
+        workoutUpdatedAt: now
+      };
+      
+      saveStudentToFirebase(studentName, updatedStudent);
+      
+      return {
+        ...prev,
+        students: {
+          ...prev.students,
+          [studentName]: updatedStudent
+        }
+      };
+    });
+  };
+
+  const removeExerciseFromSeries = (studentName: string, series: string, exId: string) => {
+    setDb(prev => {
+      const student = prev.students[studentName];
+      const now = new Date().toLocaleString('pt-BR');
+      
+      const updatedStudent = {
+        ...student,
+        workouts: {
+          ...student.workouts,
+          [series]: student.workouts[series].filter(ex => ex.id !== exId)
+        },
+        workoutUpdatedAt: now
+      };
+      
+      saveStudentToFirebase(studentName, updatedStudent);
+      
+      return {
+        ...prev,
+        students: {
+          ...prev.students,
+          [studentName]: updatedStudent
+        }
+      };
+    });
+  };
+
+  const updatePeriodization = (studentName: string, data: PeriodizationData) => {
+    setDb(prev => {
+      const student = prev.students[studentName];
+      const now = new Date().toLocaleString('pt-BR');
+      
+      const updatedStudent = {
+        ...student,
+        periodization: data,
+        periodizationUpdatedAt: now,
+        periodizationCreatedAt: student.periodizationCreatedAt || now
+      };
+      
+      saveStudentToFirebase(studentName, updatedStudent);
+      
+      return {
+        ...prev,
+        students: {
+          ...prev.students,
+          [studentName]: updatedStudent
+        }
+      };
+    });
+  };
+
+  const saveGlobalSettings = (settings: typeof db.globalSettings) => {
+    setDb(prev => {
+      saveSettingsToFirebase(settings);
+      return { ...prev, globalSettings: settings };
+    });
+  };
 
   // --- Handlers for Navigation ---
   const handleTeacherLogin = () => {
@@ -375,29 +430,35 @@ const App = () => {
     if (!db.students[name]) {
        // Create a new student with default values
        const defaultProfile = INITIAL_DB.students["André Brito"].profile;
+       const newStudent: StudentData = {
+         profile: { 
+             ...defaultProfile,
+             name: name,
+             startDate: new Date().toISOString().split('T')[0], 
+             weeklyFrequency: "3", 
+             plannedSessions: "12"
+         },
+         workouts: { "A": [], "B": [], "C": [], "D": [], "E": [] },
+         periodization: null
+       };
+       
        setDb(prev => ({
          ...prev,
          students: {
            ...prev.students,
-           [name]: {
-             profile: { 
-                 ...defaultProfile,
-                 name: name,
-                 startDate: new Date().toISOString().split('T')[0], 
-                 weeklyFrequency: "3", 
-                 plannedSessions: "12"
-             },
-             workouts: { "A": [], "B": [], "C": [], "D": [], "E": [] },
-             periodization: null
-           }
+           [name]: newStudent
          }
        }));
+       
+       // Save to Firebase immediately if new
+       const studentDoc = doc(firestore, "students", name);
+       setDoc(studentDoc, newStudent);
     }
 
     setCurrentStudentName(name);
     setActiveSeries("A");
-    setView('workspace');
-    setShowAnamnesis(true); // Check anamnesis on entry
+    setView('student-dashboard');
+    setDashboardTab('treinos');
   };
 
   const handleOpenLibrary = () => {
@@ -418,7 +479,13 @@ const App = () => {
   };
 
   const handleBackToStudents = () => {
-    setView('student-list');
+    if (view === 'student-dashboard') {
+      setView('student-list');
+    } else if (currentStudentName && (view === 'workspace' || view === 'exercise-library')) {
+      setView('student-dashboard');
+    } else {
+      setView('student-list');
+    }
   };
 
   const handlePrint = () => {
@@ -535,18 +602,36 @@ const App = () => {
 
   const generatePeriodization = async () => {
     setIsConsulting(true);
-    setShowAnamnesis(false);
+    // setShowAnamnesis(false); // Keep modal open to show loading state
     const profile = db.students[currentStudentName]?.profile;
     
     const prompt = `
-      Crie uma periodização INCISIVA e CIENTÍFICA para ${profile.name}.
-      Objetivo: ${profile.objectives}.
-      Perfil: ${profile.neurodivergence ? profile.neurodivergence : "Padrão"}.
+      Atue como um Especialista em Fisiologia do Exercício e Treinamento de Força de alto nível.
+      Crie uma periodização CIENTÍFICA, DETALHADA e INCISIVA para o aluno:
       
-      Estrutura Obrigatória:
-      1. Microciclos explícitos (ex: "Semana 1-2", "Semana 3-4").
-      2. Para cada microciclo defina: Foco, Método de Treino (ex: GVT, FST-7, Drop-set), Intensidade (%RM ou PSE) e Volume.
-      3. Cite referências científicas reais (ACSM, NSCA, estudos) que embasam a escolha.
+      DADOS DO ALUNO:
+      Nome: ${profile.name}
+      Idade: ${profile.age || "Não informada"} | Peso: ${profile.weight || "Não informado"} | Altura: ${profile.height || "Não informada"}
+      Objetivo Principal: ${profile.objectives}
+      Frequência Semanal: ${profile.weeklyFrequency || "3"} dias
+      Duração da Sessão: ${profile.sessionDuration || "60"} minutos
+      Histórico Médico/Lesões: ${profile.medicalHistory || "Nenhum"}
+      Medicamentos: ${profile.medications || "Nenhum"}
+      Neurodivergência: ${profile.neurodivergence || "Nenhuma"}
+      Cirurgia Bariátrica: ${profile.bariatric ? "Sim" : "Não"}
+      
+      DIRETRIZES OBRIGATÓRIAS:
+      1. Resumo (summary): Uma análise fisiológica profunda justificando a abordagem escolhida baseada no perfil do aluno.
+      2. Macrociclo (macrocycle): Definição clara do objetivo do macrociclo (ex: "Mesociclo de Choque Hipertrófico - 12 Semanas").
+      3. Microciclos (microcycles): Detalhe semana a semana (ex: "Semana 1-2: Adaptação Anatômica").
+         Para CADA microciclo, especifique:
+         - Foco Fisiológico (ex: "Hipertrofia Miofibrilar", "Resistência de Força")
+         - Método de Treino Avançado (ex: "Rest-Pause", "Cluster Sets", "GVT", "Pirâmide Crescente")
+         - Intensidade (%1RM, RIR - Repetições na Reserva, ou PSE)
+         - Volume (Séries semanais por grupo muscular, faixa de repetições)
+         - Observações/Ajustes biomecânicos ou periodizados.
+      4. Notas Clínicas (clinicalNotes): Recomendações fisiológicas, biomecânicas e de recuperação (sono, hidratação, modulação de estresse) específicas para este aluno, considerando seu histórico médico e possíveis neurodivergências.
+      5. Referências (references): CITE PELO MENOS 3 REFERÊNCIAS CIENTÍFICAS REAIS E ESPECÍFICAS (Autores, Ano, Periódico ou Diretrizes como ACSM, NSCA, Brad Schoenfeld, Tudor Bompa, etc.) que fundamentam as escolhas desta periodização.
       
       Responda APENAS com JSON.
     `;
@@ -587,7 +672,34 @@ const App = () => {
       const jsonText = response.text;
       if (jsonText) {
         const data = JSON.parse(jsonText);
+        
+        // Generate a visual prompt for the periodization
+        const visualPrompt = `A futuristic, high-tech fitness periodization chart for ${profile.name}, showing progress from month 1 to 3. The theme is weight loss and athletic performance. Cinematic lighting, 8k, professional sports science infographic style, dark background with red accents.`;
+        
+        try {
+          const imageResponse = await ai.models.generateContent({
+            model: IMAGEN_MODEL,
+            contents: { parts: [{ text: visualPrompt }] },
+            config: { imageConfig: { aspectRatio: "16:9" } }
+          });
+          
+          let base64Image = null;
+          for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+              base64Image = part.inlineData.data;
+              break;
+            }
+          }
+          
+          if (base64Image) {
+            data.image = `data:image/jpeg;base64,${base64Image}`;
+          }
+        } catch (imgErr) {
+          console.error("Erro ao gerar imagem da periodização", imgErr);
+        }
+
         updatePeriodization(currentStudentName, data);
+        setShowAnamnesis(false); // Close modal only after success
         setShowReport(true);
         generateBioInsight();
       }
@@ -596,6 +708,14 @@ const App = () => {
     } finally { 
       setIsConsulting(false); 
     }
+  };
+
+  const handleSaveAndExit = async () => {
+    setIsSaving(true);
+    // Simulate saving delay for better UX
+    await new Promise(resolve => setTimeout(resolve, 800));
+    setShowAnamnesis(false);
+    setIsSaving(false);
   };
 
   const handleSelectExerciseWithDelay = (exerciseName: string) => {
@@ -610,6 +730,7 @@ const App = () => {
 
   const processExerciseDataAndGenerateImage = async (exerciseName: string) => {
     setImageLoading(true);
+    console.log("Starting processExerciseDataAndGenerateImage for:", exerciseName);
     try {
       const brainPrompt = `Analise o exercício "${exerciseName}". 
       Instruções biomecânicas:
@@ -621,8 +742,9 @@ const App = () => {
       Forneça:
       1. Descrição técnica curta (português).
       2. 3 Benefícios (português).
-      3. PROMPT VISUAL INGLÊS 8k descrevendo atleta preto, biomecânica e luz de estúdio.`;
+      3. PROMPT VISUAL INGLÊS 8k: Ultra-realistic 8k photo of a black male or female athlete with an athletic body executing this exercise, wearing fully covering black Adidas sportswear and white sneakers, no bare skin on torso or body, in a modern gym with cinematic lighting. Photorealistic, highly detailed, 4k.`;
 
+      console.log("Calling GEMINI_MODEL for text analysis...");
       // 1. Get Text Analysis
       const brainData = await ai.models.generateContent({
         model: GEMINI_MODEL,
@@ -640,10 +762,16 @@ const App = () => {
         }
       });
 
-      const brainResult = JSON.parse(brainData.text || "{}") as BrainResult;
+      console.log("Received response from GEMINI_MODEL:", brainData.text);
+      let text = brainData.text || "{}";
+      text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      const brainResult = JSON.parse(text) as BrainResult;
+
+      console.log("Parsed brainResult:", brainResult);
 
       // 2. Generate Image using Imagen
       if (brainResult.visualPrompt) {
+        console.log("Calling IMAGEN_MODEL for image generation...");
         const imageResponse = await ai.models.generateContent({
           model: IMAGEN_MODEL,
           contents: {
@@ -656,6 +784,8 @@ const App = () => {
           }
         });
 
+        console.log("Received response from IMAGEN_MODEL");
+
         let base64Image = null;
         for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
           if (part.inlineData) {
@@ -665,7 +795,10 @@ const App = () => {
         }
 
         if (base64Image) {
+          console.log("Image successfully extracted");
           setExerciseImage(`data:image/jpeg;base64,${base64Image}`);
+        } else {
+          console.log("No image data found in response");
         }
       }
 
@@ -674,11 +807,13 @@ const App = () => {
         description: brainResult.description,
         benefits: brainResult.benefits
       });
+      console.log("Successfully updated selectedExercise");
 
     } catch (err) {
       console.error("Erro ao processar.", err);
     } finally {
       setImageLoading(false);
+      console.log("Finished processExerciseDataAndGenerateImage");
     }
   };
 
@@ -716,7 +851,7 @@ const App = () => {
 
   if (view === 'teacher-login') {
     return (
-      <div className="min-h-screen bg-black text-white font-sans flex items-center justify-center p-6 relative overflow-hidden">
+      <div className="min-h-[100dvh] bg-black text-white font-sans flex items-center justify-center p-6 relative overflow-hidden">
         <style>{animationStyles}</style>
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-red-900/10 via-black to-black opacity-50 pointer-events-none"></div>
         <div className="max-w-md w-full bg-neutral-900/50 border border-white/10 p-12 rounded-[3rem] shadow-2xl relative z-10 backdrop-blur-xl">
@@ -763,7 +898,7 @@ const App = () => {
 
   if (view === 'student-list') {
     return (
-      <div className="min-h-screen bg-black text-white font-sans selection:bg-red-500/30">
+      <div className="min-h-[100dvh] bg-black text-white font-sans selection:bg-red-500/30">
         <nav className="border-b border-white/5 bg-black/95 backdrop-blur-3xl sticky top-0 z-50 h-20 flex items-center">
           <div className="max-w-7xl mx-auto px-6 w-full flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -838,7 +973,13 @@ const App = () => {
                     <p className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-red-400">Visualizar Exercícios & IA</p>
                 </button>
 
-                <button className="bg-transparent border-2 border-dashed border-white/10 p-8 rounded-[2.5rem] hover:border-red-500/30 hover:bg-red-500/5 transition-all flex flex-col items-center justify-center gap-4 text-neutral-500 hover:text-red-500 h-full min-h-[240px]">
+                <button 
+                  onClick={() => {
+                    const name = window.prompt("Nome do novo aluno:");
+                    if (name) handleSelectStudent(name);
+                  }}
+                  className="bg-transparent border-2 border-dashed border-white/10 p-8 rounded-[2.5rem] hover:border-red-500/30 hover:bg-red-500/5 transition-all flex flex-col items-center justify-center gap-4 text-neutral-500 hover:text-red-500 h-full min-h-[240px]"
+                >
                    <Plus className="w-8 h-8" />
                    <span className="text-[10px] font-black uppercase tracking-widest">Novo Cadastro</span>
                 </button>
@@ -910,10 +1051,275 @@ const App = () => {
     );
   }
 
+  // --- Student Dashboard View ---
+  if (view === 'student-dashboard') {
+    const student = db.students[currentStudentName];
+    if (!student) return null;
+
+    return (
+      <div className="min-h-[100dvh] bg-black text-white font-sans selection:bg-red-500/30">
+        <nav className="border-b border-white/5 bg-black/95 backdrop-blur-3xl sticky top-0 z-50 h-20 flex items-center">
+          <div className="max-w-7xl mx-auto px-6 w-full flex items-center justify-between">
+            <div className="flex items-center gap-4">
+               <button onClick={handleBackToStudents} className="bg-neutral-900 p-2 rounded-lg hover:bg-neutral-800 transition-colors group">
+                 <ChevronRight className="w-4 h-4 text-neutral-500 group-hover:text-white rotate-180" />
+               </button>
+               <div>
+                 <p className="text-[10px] text-neutral-500 font-black uppercase tracking-widest">Painel do Aluno</p>
+                 <h2 className="text-lg font-bold leading-none">{currentStudentName}</h2>
+               </div>
+            </div>
+            
+            <div className="flex items-center gap-4">
+               <div className="flex bg-neutral-900 p-1 rounded-xl border border-white/5">
+                 <button 
+                   onClick={() => setDashboardTab('treinos')}
+                   className={`px-6 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${dashboardTab === 'treinos' ? 'bg-red-500 text-black' : 'text-neutral-500 hover:text-white'}`}
+                 >
+                   Treinos
+                 </button>
+                 <button 
+                   onClick={() => setDashboardTab('periodizacao')}
+                   className={`px-6 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-all ${dashboardTab === 'periodizacao' ? 'bg-red-500 text-black' : 'text-neutral-500 hover:text-white'}`}
+                 >
+                   Periodização
+                 </button>
+               </div>
+               <button onClick={() => setShowAnamnesis(true)} className="p-2 text-neutral-500 hover:text-white transition-colors flex items-center gap-2 group">
+                 <ClipboardList className="w-5 h-5" />
+               </button>
+            </div>
+          </div>
+        </nav>
+
+        <main className="max-w-7xl mx-auto px-6 py-8">
+          {dashboardTab === 'treinos' ? (
+            <div className="space-y-8">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-2xl font-black uppercase italic tracking-tighter">Gestão de Treinos</h3>
+                  <div className="flex flex-wrap gap-4 mt-2">
+                    {student.workoutCreatedAt && (
+                      <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> Criado: {student.workoutCreatedAt}
+                      </span>
+                    )}
+                    {student.workoutUpdatedAt && (
+                      <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                        <Activity className="w-3 h-3" /> Atualizado: {student.workoutUpdatedAt}
+                      </span>
+                    )}
+                    {student.renewalDate && (
+                      <span className="text-[10px] text-red-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                        <Calendar className="w-3 h-3" /> Renovação: {student.renewalDate}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    const hasWorkouts = Object.values(student.workouts).some((series: PrescribedExercise[]) => series.length > 0);
+                    if (!hasWorkouts && !student.periodization) {
+                      setShowAnamnesis(true);
+                    } else {
+                      setView('workspace');
+                    }
+                  }}
+                  className="px-8 py-4 bg-red-500 text-black font-black uppercase tracking-widest rounded-2xl hover:bg-white transition-all flex items-center gap-2 shadow-lg shadow-red-500/20"
+                >
+                  <Plus className="w-4 h-4" /> Montar/Editar Treino
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {Object.values(student.workouts).every((series: PrescribedExercise[]) => series.length === 0) ? (
+                  <div className="col-span-full flex flex-col items-center justify-center p-12 text-center bg-neutral-900/40 border border-white/5 rounded-[2.5rem]">
+                    <div className="bg-neutral-950 p-4 rounded-full mb-4 border border-white/5">
+                      <Activity className="w-8 h-8 text-neutral-600" />
+                    </div>
+                    <h4 className="text-lg font-black uppercase italic tracking-tighter text-neutral-400 mb-2">Nenhum treino montado</h4>
+                    <p className="text-xs text-neutral-500 font-bold uppercase tracking-widest max-w-sm">
+                      Clique em "Montar/Editar Treino" para criar a ficha deste aluno.
+                    </p>
+                  </div>
+                ) : (
+                  SERIES_OPTIONS.map(series => {
+                    const exercises = student.workouts[series] || [];
+                    if (exercises.length === 0) return null;
+                    return (
+                      <div key={series} className="bg-neutral-900/40 border border-white/5 rounded-[2.5rem] p-8 space-y-6">
+                      <div className="flex items-center justify-between">
+                        <div className="h-12 w-12 bg-red-500 rounded-2xl flex items-center justify-center text-black font-black text-xl">
+                          {series}
+                        </div>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">{exercises.length} Exercícios</span>
+                      </div>
+                      <div className="space-y-3">
+                        {exercises.map(ex => (
+                          <div key={ex.id} className="p-4 bg-black/40 rounded-2xl border border-white/5 space-y-3 hover:border-red-500/30 transition-colors group">
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 w-2 bg-red-500 rounded-full shadow-[0_0_8px_rgba(239,68,68,0.5)] group-hover:scale-125 transition-transform"></div>
+                              <span className="text-xs font-black text-white uppercase tracking-tight leading-tight">{ex.name}</span>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-white/5 p-2 rounded-xl border border-white/5">
+                                <span className="block text-[8px] text-neutral-500 uppercase font-black tracking-widest mb-0.5">Séries x Reps</span>
+                                <span className="text-[10px] text-neutral-200 font-mono font-bold">{ex.sets} x {ex.reps}</span>
+                              </div>
+                              <div className="bg-white/5 p-2 rounded-xl border border-white/5">
+                                <span className="block text-[8px] text-neutral-500 uppercase font-black tracking-widest mb-0.5">Descanso</span>
+                                <span className="text-[10px] text-neutral-200 font-mono font-bold">{ex.rest}</span>
+                              </div>
+                            </div>
+
+                            {ex.technique && ex.technique !== 'Normal' && (
+                              <div className="bg-red-500/10 p-2 rounded-xl border border-red-500/20">
+                                <span className="block text-[8px] text-red-400 uppercase font-black tracking-widest mb-0.5">Método Avançado</span>
+                                <span className="text-[10px] text-red-200 font-black italic">{ex.technique}</span>
+                              </div>
+                            )}
+
+                            {ex.observation && (
+                              <div className="bg-neutral-800/30 p-2 rounded-xl border border-white/5">
+                                <span className="block text-[8px] text-neutral-500 uppercase font-black tracking-widest mb-0.5">Observações</span>
+                                <p className="text-[9px] text-neutral-400 italic leading-snug">{ex.observation}</p>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-8">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-2xl font-black uppercase italic tracking-tighter">Periodização Científica</h3>
+                  <div className="flex gap-4 mt-2">
+                    {student.periodizationCreatedAt && (
+                      <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> Criado: {student.periodizationCreatedAt}
+                      </span>
+                    )}
+                    {student.periodizationUpdatedAt && (
+                      <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                        <Activity className="w-3 h-3" /> Atualizado: {student.periodizationUpdatedAt}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    setView('workspace');
+                    setShowReport(true);
+                  }}
+                  className="px-8 py-4 bg-red-500 text-black font-black uppercase tracking-widest rounded-2xl hover:bg-white transition-all flex items-center gap-2 shadow-lg shadow-red-500/20"
+                >
+                  <TrendingUp className="w-4 h-4" /> Gerar/Ver Periodização
+                </button>
+              </div>
+
+              {student.periodization ? (
+                <div className="bg-neutral-900/40 border border-white/5 rounded-[3rem] p-12 space-y-12">
+                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+                      <div className="lg:col-span-2 space-y-6">
+                         <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-red-500">Resumo Estratégico</h4>
+                         <p className="text-neutral-400 text-lg leading-relaxed">{student.periodization.summary}</p>
+                      </div>
+                      <div className="bg-black/40 p-8 rounded-[2rem] border border-white/5">
+                         <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-neutral-500 mb-4">Macrociclo</h4>
+                         <p className="text-white font-bold">{student.periodization.macrocycle}</p>
+                      </div>
+                   </div>
+                   
+                   <div className="space-y-6">
+                      <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-neutral-500">Microciclos Planejados</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                         {student.periodization.microcycles.map((m, i) => (
+                           <div key={i} className="bg-neutral-950 p-6 rounded-2xl border border-white/5 space-y-4">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">{m.range}</span>
+                                <span className="h-6 w-6 rounded-full bg-white/5 flex items-center justify-center text-[10px] font-bold text-neutral-500">{i+1}</span>
+                              </div>
+                              <p className="text-xs font-black uppercase tracking-widest text-white">{m.focus}</p>
+                              <div className="pt-4 border-t border-white/5 space-y-2">
+                                <div className="flex justify-between text-[10px] uppercase tracking-widest">
+                                  <span className="text-neutral-600">Intensidade</span>
+                                  <span className="text-neutral-400">{m.intensity}</span>
+                                </div>
+                                <div className="flex justify-between text-[10px] uppercase tracking-widest">
+                                  <span className="text-neutral-600">Volume</span>
+                                  <span className="text-neutral-400">{m.volume}</span>
+                                </div>
+                                {m.method && (
+                                   <div className="flex justify-between text-[10px] uppercase tracking-widest">
+                                     <span className="text-neutral-600">Método</span>
+                                     <span className="text-red-400">{m.method}</span>
+                                   </div>
+                                 )}
+                              </div>
+                              {m.notes && <p className="text-[9px] text-neutral-500 italic leading-tight">{m.notes}</p>}
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+
+                   {student.periodization.image && (
+                      <div className="rounded-[2rem] overflow-hidden border border-white/5">
+                        <img src={student.periodization.image} alt="Visualização da Periodização" className="w-full h-auto object-cover opacity-80 hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                      {student.periodization.clinicalNotes && (
+                        <div className="space-y-6">
+                          <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-red-500">Notas Clínicas & Fisiológicas</h4>
+                          <ul className="space-y-3">
+                            {student.periodization.clinicalNotes.map((note, i) => (
+                              <li key={i} className="flex gap-3 text-sm text-neutral-400">
+                                <span className="text-red-500 font-bold">/</span>
+                                {note}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {student.periodization.references && (
+                        <div className="space-y-6">
+                          <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-neutral-500">Embasamento Científico</h4>
+                          <div className="bg-black/20 p-6 rounded-2xl border border-white/5 space-y-4">
+                            {student.periodization.references.map((ref, i) => (
+                              <div key={i} className="flex items-start gap-3">
+                                <BookOpen className="w-4 h-4 text-neutral-600 mt-1 shrink-0" />
+                                <p className="text-[10px] text-neutral-500 leading-relaxed italic">{ref}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                </div>
+              ) : (
+                <div className="h-96 flex flex-col items-center justify-center text-neutral-700 border-2 border-dashed border-white/5 rounded-[3rem] bg-neutral-950/20">
+                  <TrendingUp className="w-16 h-16 opacity-10 mb-6" />
+                  <p className="font-black uppercase tracking-[0.4em] text-[10px] text-red-500 text-center px-8">Nenhuma periodização gerada para este aluno ainda.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
   // --- Exercise Library View ---
   if (view === 'exercise-library') {
     return (
-      <div className="min-h-screen bg-black text-white font-sans selection:bg-red-500/30 overflow-x-hidden">
+      <div className="min-h-[100dvh] bg-black text-white font-sans selection:bg-red-500/30 overflow-x-hidden">
         <style>{animationStyles}</style>
         
         <nav className="border-b border-white/5 bg-black/95 backdrop-blur-3xl sticky top-0 z-50 h-16 flex items-center">
@@ -1030,7 +1436,7 @@ const App = () => {
 
   // --- Workspace View (Default Fallback) ---
   return (
-    <div className="min-h-screen bg-black text-white font-sans selection:bg-red-500/30 pb-32">
+    <div className="min-h-[100dvh] bg-black text-white font-sans selection:bg-red-500/30 pb-32">
        <nav className="border-b border-white/5 bg-black/95 backdrop-blur-3xl sticky top-0 z-50 h-20 flex items-center">
           <div className="max-w-7xl mx-auto px-6 w-full flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -1314,7 +1720,14 @@ const App = () => {
                 <h2 className="text-2xl font-black uppercase italic tracking-tighter text-white">Anamnese & Plano</h2>
                 <p className="text-[10px] font-black uppercase tracking-widest text-red-500">{db.students[currentStudentName]?.profile.name}</p>
               </div>
-              <button onClick={() => setShowAnamnesis(false)} className="text-neutral-500 hover:text-white transition-colors text-xs font-black uppercase tracking-widest">Salvar e Sair</button>
+              <button 
+                onClick={handleSaveAndExit} 
+                disabled={isSaving}
+                className="text-neutral-500 hover:text-white transition-colors text-xs font-black uppercase tracking-widest flex items-center gap-2"
+              >
+                {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                {isSaving ? "Salvando..." : "Salvar e Sair"}
+              </button>
             </div>
             
             <div className="flex-1 overflow-y-auto p-12 grid grid-cols-1 md:grid-cols-2 gap-10 scrollbar-thin scrollbar-thumb-red-500/20">
@@ -1410,7 +1823,22 @@ const App = () => {
               </div>
             </div>
             <div className="p-10 border-t border-white/5 bg-neutral-950">
-              <button onClick={generatePeriodization} className="w-full py-6 bg-red-500 text-black font-black uppercase tracking-[0.2em] rounded-[1.5rem] hover:bg-white transition-all shadow-2xl text-xs">Gerar Periodização Científica ✨</button>
+              <button 
+                onClick={generatePeriodization} 
+                disabled={isConsulting}
+                className={`w-full py-6 bg-red-500 text-black font-black uppercase tracking-[0.2em] rounded-[1.5rem] hover:bg-white transition-all shadow-2xl text-xs flex items-center justify-center gap-2 ${isConsulting ? 'opacity-80 cursor-not-allowed' : ''}`}
+              >
+                {isConsulting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Gerando Periodização...
+                  </>
+                ) : (
+                  <>
+                    Gerar Periodização Científica <Sparkles className="w-4 h-4 ml-1" />
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -1419,7 +1847,7 @@ const App = () => {
       {/* Modal de Relatório (Printable) */}
       {showReport && db.students[currentStudentName]?.periodization && (
         <div className="fixed inset-0 z-[110] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-6 overflow-y-auto">
-          <div className="printable-area bg-white text-black w-full max-w-5xl min-h-[90vh] rounded-none md:rounded-[3.5rem] overflow-hidden flex flex-col shadow-3xl animate-in zoom-in-95 relative">
+          <div className="printable-area bg-white text-black w-full max-w-5xl min-h-[90dvh] rounded-none md:rounded-[3.5rem] overflow-hidden flex flex-col shadow-3xl animate-in zoom-in-95 relative">
             
             {/* Header / Actions (Hidden on Print) */}
             <div className="no-print p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center sticky top-0 z-10">
@@ -1470,6 +1898,17 @@ const App = () => {
                     <h3 className="text-xs font-black text-red-500 uppercase mb-3 tracking-widest">Macro-Estratégia</h3>
                     <p className="text-lg italic leading-relaxed">"{db.students[currentStudentName]?.periodization?.summary}"</p>
                  </div>
+
+                 {db.students[currentStudentName]?.periodization?.image && (
+                   <div className="rounded-2xl overflow-hidden border border-gray-200 shadow-xl mb-6">
+                     <img 
+                       src={db.students[currentStudentName]?.periodization?.image} 
+                       alt="Visualização da Periodização" 
+                       className="w-full h-auto object-cover"
+                       referrerPolicy="no-referrer"
+                     />
+                   </div>
+                 )}
 
                  <div className="space-y-4">
                     <h3 className="text-lg font-black uppercase tracking-tighter border-b border-gray-200 pb-2">Cronograma de Microciclos</h3>

@@ -38,6 +38,7 @@ export interface PeriodizationData {
   microcycles: Microcycle[];
   clinicalNotes: string[];
   references: string[];
+  image?: string;
 }
 
 export interface ExerciseDetails {
@@ -69,6 +70,11 @@ export interface StudentData {
     [key: string]: PrescribedExercise[];
   };
   periodization?: PeriodizationData | null;
+  workoutCreatedAt?: string;
+  workoutUpdatedAt?: string;
+  periodizationCreatedAt?: string;
+  periodizationUpdatedAt?: string;
+  renewalDate?: string;
 }
 
 export interface AppDatabase {
@@ -82,4 +88,4 @@ export interface AppDatabase {
   };
 }
 
-export type AppView = 'teacher-login' | 'student-list' | 'workspace' | 'exercise-library';
+export type AppView = 'teacher-login' | 'student-list' | 'workspace' | 'exercise-library' | 'student-dashboard';
